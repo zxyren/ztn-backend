@@ -1,12 +1,9 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
-# Install system dependencies that yt-dlp needs
-RUN apt-get update && \
-    apt-get install -y \
+RUN apt-get update && apt-get install -y \
     ffmpeg \
-    wget \
-    curl \
-    ca-certificates \
+    gcc \
+    libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -16,8 +13,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p /tmp/downloads
+EXPOSE 8000
 
-EXPOSE 5000
-
-CMD gunicorn backend:app --bind 0.0.0.0:$PORT --workers 2 --timeout 300
+CMD ["gunicorn", "-b", "0.0.0.0:8000", "app:app"]
