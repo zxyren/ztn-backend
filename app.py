@@ -1,7 +1,6 @@
 import os
 import threading
 import time
-import tempfile
 import glob
 from queue import Queue
 from flask import Flask, request, jsonify, send_file, Response
@@ -20,10 +19,11 @@ CORS(app)  # Enable CORS for React frontend
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# Use temp directory instead of project folder - files will be served to users and cleaned up
-DOWNLOAD_FOLDER = tempfile.mkdtemp(prefix="video_downloader_")
+# Use persistent directory for downloads
+# In production (Koyeb), use /tmp/downloads or mount a persistent volume
+DOWNLOAD_FOLDER = os.environ.get("DOWNLOAD_FOLDER", "/tmp/downloads")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-print(f"✓ Temporary download folder: {DOWNLOAD_FOLDER}")
+print(f"✓ Download folder: {DOWNLOAD_FOLDER}")
 
 def detect_ffmpeg():
     # Check if ffmpeg exists in PATH
