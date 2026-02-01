@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+import tempfile
 import glob
 from queue import Queue
 from flask import Flask, request, jsonify, send_file, Response
@@ -11,27 +12,18 @@ import shutil
 import subprocess
 import json
 import logging
-from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for React frontend
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 # Disable Flask's request logging for the SSE endpoint
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# Use persistent directory for downloads
-# In production (Koyeb), use /tmp/downloads or mount a persistent volume
-DOWNLOAD_FOLDER = os.environ.get("DOWNLOAD_FOLDER", "/tmp/downloads")
+# Use temp directory instead of project folder - files will be served to users and cleaned up
+DOWNLOAD_FOLDER = tempfile.mkdtemp(prefix="video_downloader_")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-print(f"✓ Download folder: {DOWNLOAD_FOLDER}")
+print(f"✓ Temporary download folder: {DOWNLOAD_FOLDER}")
 
 def detect_ffmpeg():
     # Check if ffmpeg exists in PATH
@@ -113,7 +105,6 @@ def ydl_options(progress_cb):
 
 def download_one(item):
     downloaded_filename = None
-    logger.info(f"Starting download for item {item['id']}: {item['url']}")
     
     def progress_hook(d):
         if d['status'] == 'downloading':
@@ -133,45 +124,34 @@ def download_one(item):
             if 'filename' in d:
                 nonlocal downloaded_filename
                 downloaded_filename = d['filename']
-                logger.info(f"Download finished, filename: {downloaded_filename}")
 
     opts = ydl_options(progress_hook)
     try:
         with YoutubeDL(opts) as ydl:
             # Extract info first to get the expected filename
-            logger.info(f"Extracting info from: {item['url']}")
             info = ydl.extract_info(item['url'], download=False)
             expected_filename = ydl.prepare_filename(info)
-            logger.info(f"Expected filename: {expected_filename}")
-            
-            logger.info(f"Starting download to: {DOWNLOAD_FOLDER}")
             ydl.download([item['url']])
         
         # Use the expected filename, or find the most recently modified file as fallback
         if os.path.exists(expected_filename):
             downloaded_filename = expected_filename
-            logger.info(f"File found at expected location: {expected_filename}")
         else:
             # Fallback: Get the most recently modified file in download folder
             files = glob.glob(os.path.join(DOWNLOAD_FOLDER, '*'))
             if files:
                 downloaded_filename = max(files, key=os.path.getmtime)
-                logger.info(f"File found via fallback: {downloaded_filename}")
-            else:
-                logger.warning(f"No files found in {DOWNLOAD_FOLDER}")
         
         with state_lock:
             item['status'] = 'Completed'
             item['filename'] = os.path.basename(downloaded_filename) if downloaded_filename else None
             item['filepath'] = downloaded_filename if downloaded_filename else None
             downloads['completed'] += 1
-        logger.info(f"Download completed for item {item['id']}: {item['filename']}")
         broadcast_update()  # Send update to clients
     except Exception as e:
-        error_msg = f"Download failed: {str(e)}"
-        logger.error(f"Item {item['id']}: {error_msg}", exc_info=True)
+        print(f"--- DOWNLOAD FAILED: {str(e)} ---")
         with state_lock:
-            item['status'] = 'Failed'
+            item['status'] = 'Error'
             item['error'] = str(e)
         broadcast_update()  # Send update to clients
 
@@ -204,7 +184,6 @@ def queue_download():
     global next_id
     data = request.get_json(force=True, silent=True) or {}
     urls = data.get("urls", [])
-    logger.info(f"Queue request received with {len(urls)} URLs")
     with state_lock:
         for raw_url in urls:
             url = (raw_url or "").strip()
@@ -215,7 +194,6 @@ def queue_download():
             downloads['queue'].append(item)
             downloads['total'] += 1
             task_queue.put(url)
-            logger.info(f"Added item {item['id']} to queue: {url}")
     broadcast_update()  # Send update to clients
     return jsonify(downloads)
 
@@ -224,10 +202,8 @@ def upload_file():
     global next_id
     f = request.files.get("file")
     if not f:
-        logger.warning("Upload request with no file")
         return jsonify({"error": "No file"}), 400
     lines = [ln.strip() for ln in f.read().decode("utf-8", errors="ignore").splitlines() if ln.strip()]
-    logger.info(f"File uploaded with {len(lines)} URLs")
     with state_lock:
         for url in lines:
             item = {"id": next_id, "url": url, "status": "Queued", "progress": 0.0}
@@ -235,7 +211,6 @@ def upload_file():
             downloads['queue'].append(item)
             downloads['total'] += 1
             task_queue.put(url)
-            logger.info(f"Added item {item['id']} from upload: {url}")
     broadcast_update()  # Send update to clients
     return jsonify(downloads)
 
@@ -281,25 +256,20 @@ def events():
 @app.route("/api/download/<int:item_id>")
 def download_file(item_id):
     """Serve the downloaded file to trigger browser download"""
-    logger.info(f"Download request for item {item_id}")
     with state_lock:
         item = next((x for x in downloads['queue'] if x['id'] == item_id), None)
     
     if not item:
-        logger.warning(f"Item {item_id} not found")
         return jsonify({"error": "Item not found"}), 404
     
     if item['status'] != 'Completed':
-        logger.warning(f"Item {item_id} not ready. Status: {item['status']}")
-        return jsonify({"error": f"File not ready. Status: {item['status']}"}), 400
+        return jsonify({"error": "File not ready"}), 400
     
     filepath = item.get('filepath')
     if not filepath or not os.path.exists(filepath):
-        logger.error(f"File not found for item {item_id}. Filepath: {filepath}")
-        return jsonify({"error": "File not found on server"}), 404
+        return jsonify({"error": "File not found"}), 404
     
     filename = item.get('filename', 'video.mp4')
-    logger.info(f"Serving file {filename} for item {item_id}")
     return send_file(filepath, as_attachment=True, download_name=filename)
 
 @app.route("/api/clear", methods=["POST"])
@@ -347,10 +317,7 @@ def index():
     
 # Start workers for Gunicorn & production
 start_workers()
-logger.info(f"✓ Workers started. Download folder: {DOWNLOAD_FOLDER}")
-logger.info(f"✓ FFmpeg: {'Available' if FFMPEG_PATH else 'Not available'}")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Starting Flask app on port {port}")
     app.run(host="0.0.0.0", port=port)
