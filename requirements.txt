@@ -1,8 +1,8 @@
-Flask==3.0.0
-flask-cors==4.0.0
-yt-dlp==2024.12.23
-gunicorn==21.2.0
-brotli==1.1.0
-certifi==2024.2.2
-pycryptodomex==3.20.0
-websockets==12.0
+Flask>=3.0,<4.0
+flask-cors>=4.0,<5.0
+gunicorn>=21,<22
+yt-dlp
+brotli
+certifi
+pycryptodomex
+websockets
