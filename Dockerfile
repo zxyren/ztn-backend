@@ -8,15 +8,17 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     build-essential \
     wget \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Install QuickJS (compile from source)
-RUN wget https://bellard.org/bpg/quickjs/quickjs-2022-12-22.tar.xz -O /tmp/quickjs.tar.xz \
-    && tar -xvf /tmp/quickjs.tar.xz -C /tmp \
-    && cd /tmp/quickjs-2022-12-22 \
+# Install QuickJS
+RUN wget https://bellard.org/quickjs/quickjs-2024-01-13.tar.xz \
+    && tar -xf quickjs-2024-01-13.tar.xz \
+    && cd quickjs-2024-01-13 \
     && make \
     && make install \
-    && rm -rf /tmp/quickjs*
+    && cd / \
+    && rm -rf quickjs-2024-01-13 quickjs-2024-01-13.tar.xz
 
 # Install required Python dependencies globally
 RUN pip install --upgrade pip
