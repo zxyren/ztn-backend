@@ -8,17 +8,9 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     build-essential \
     wget \
+    quickjs \
     xz-utils \
     && rm -rf /var/lib/apt/lists/*
-
-# Install QuickJS
-RUN wget https://bellard.org/quickjs/quickjs-2024-01-13.tar.xz \
-    && tar -xf quickjs-2024-01-13.tar.xz \
-    && cd quickjs-2024-01-13 \
-    && make \
-    && make install \
-    && cd / \
-    && rm -rf quickjs-2024-01-13 quickjs-2024-01-13.tar.xz
 
 # Install required Python dependencies globally
 RUN pip install --upgrade pip
@@ -28,6 +20,7 @@ RUN pip install \
     flask-cors \
     gunicorn \
     pycryptodomex \
+    quickjs \
     websockets \
     brotli \
     certifi
