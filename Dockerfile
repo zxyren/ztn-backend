@@ -6,7 +6,17 @@ RUN apt-get update && apt-get install -y \
     gcc \
     libffi-dev \
     ca-certificates \
+    build-essential \
+    wget \
     && rm -rf /var/lib/apt/lists/*
+
+# Install QuickJS (compile from source)
+RUN wget https://bellard.org/bpg/quickjs/quickjs-2022-12-22.tar.xz -O /tmp/quickjs.tar.xz \
+    && tar -xvf /tmp/quickjs.tar.xz -C /tmp \
+    && cd /tmp/quickjs-2022-12-22 \
+    && make \
+    && make install \
+    && rm -rf /tmp/quickjs*
 
 # Install required Python dependencies globally
 RUN pip install --upgrade pip
