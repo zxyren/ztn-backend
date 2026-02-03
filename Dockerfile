@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install required Python dependencies globally             #Can delete any times
+# Install required Python dependencies globally
 RUN pip install --upgrade pip
 RUN pip install \
     yt-dlp \
