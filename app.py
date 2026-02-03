@@ -73,74 +73,28 @@ def broadcast_update():
             except:
                 sse_clients.remove(client_queue)
 
-# def ydl_options(progress_cb):
-#     opts = {
-#         'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
-#         'progress_hooks': [progress_cb],
-#         'restrictfilenames': True,
-#         'windowsfilenames': True,
-#         'updatetime': False,
-#         'noverifyhttpscert': True,
-#         'buffersize': 1024 * 64,
-#         'continuedl': True,
-#         'http_headers': {
-#             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-#         }
-#     }
-    
-#     if FFMPEG_PATH:
-#         opts['format'] = 'bestvideo+bestaudio/best'
-#         opts['merge_output_format'] = 'mp4'
-#     else:
-#         # Fallback to single format if FFmpeg not available
-#         print("⚠ FFmpeg not available - downloading single format only")
-#         opts['format'] = 'best'  # Download best single format (no merging needed)
-
-#     return opts
-
-def detect_deno():
-    return shutil.which("deno") is not None
-
-
-def detect_cookies():
-    # adjust path if you store cookies elsewhere
-    return os.path.exists("/cookies.txt")
-
 def ydl_options(progress_cb):
     opts = {
-        "outtmpl": os.path.join(DOWNLOAD_FOLDER, "%(title)s.%(ext)s"),
-        "progress_hooks": [progress_cb],
-        "restrictfilenames": True,
-        "windowsfilenames": True,
-        "updatetime": False,
-        "continuedl": True,
-        "buffersize": 1024 * 64,
-
-        "http_headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-US,en;q=0.9",
-        },
+        'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
+        'progress_hooks': [progress_cb],
+        'restrictfilenames': True,
+        'windowsfilenames': True,
+        'updatetime': False,
+        'noverifyhttpscert': True,
+        'buffersize': 1024 * 64,
+        'continuedl': True,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        }
     }
-
-    # ✅ Enable JS runtime ONLY if available
-    if detect_deno():
-        opts["js_runtimes"] = ["deno"]
-
-    # ✅ Enable cookies ONLY if present
-    if detect_cookies():
-        opts["cookies"] = "/cookies.txt"
-
+    
     if FFMPEG_PATH:
-        opts["ffmpeg_location"] = FFMPEG_PATH
-        opts["format"] = "bv*+ba/b"
-        opts["merge_output_format"] = "mp4"
+        opts['format'] = 'bestvideo+bestaudio/best'
+        opts['merge_output_format'] = 'mp4'
     else:
+        # Fallback to single format if FFmpeg not available
         print("⚠ FFmpeg not available - downloading single format only")
-        opts["format"] = "best"
+        opts['format'] = 'best'  # Download best single format (no merging needed)
 
     return opts
 
