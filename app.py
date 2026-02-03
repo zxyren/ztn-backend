@@ -104,7 +104,7 @@ def detect_deno():
 
 def detect_cookies():
     # adjust path if you store cookies elsewhere
-    return os.path.exists("/cookies.txt")
+    return os.path.exists("/app/cookies.txt")
 
 def ydl_options(progress_cb):
     opts = {
@@ -132,7 +132,7 @@ def ydl_options(progress_cb):
 
     # ✅ Enable cookies ONLY if present
     if detect_cookies():
-        opts["cookies"] = "/cookies.txt"
+        opts["cookies"] = "/app/cookies.txt"
 
     if FFMPEG_PATH:
         opts["ffmpeg_location"] = FFMPEG_PATH
