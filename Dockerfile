@@ -12,6 +12,11 @@ RUN apt-get update && apt-get install -y \
     xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Deno (JS runtime for yt-dlp)
+RUN apt-get update && apt-get install -y curl unzip \
+    && curl -fsSL https://deno.land/install.sh | sh \
+    && ln -s /root/.deno/bin/deno /usr/local/bin/deno
+
 # Install required Python dependencies globally
 RUN pip install --upgrade pip
 RUN pip install \
@@ -27,6 +32,7 @@ RUN pip install \
 
 WORKDIR /app
 
+COPY cookies.txt /app/cookies.txt
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
