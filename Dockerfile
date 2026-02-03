@@ -8,7 +8,17 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install yt-dlp
+# Install required Python dependencies
+RUN pip install --upgrade pip
+RUN pip install \
+    yt-dlp \
+    flask \
+    flask-cors \
+    gunicorn \
+    pycryptodomex \
+    websockets \
+    brotli \
+    certifi
 
 WORKDIR /app
 
