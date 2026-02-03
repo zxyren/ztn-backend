@@ -73,31 +73,6 @@ def broadcast_update():
             except:
                 sse_clients.remove(client_queue)
 
-# def ydl_options(progress_cb):
-#     opts = {
-#         'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
-#         'progress_hooks': [progress_cb],
-#         'restrictfilenames': True,
-#         'windowsfilenames': True,
-#         'updatetime': False,
-#         'noverifyhttpscert': True,
-#         'buffersize': 1024 * 64,
-#         'continuedl': True,
-#         'http_headers': {
-#             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-#         }
-#     }
-    
-#     if FFMPEG_PATH:
-#         opts['format'] = 'bestvideo+bestaudio/best'
-#         opts['merge_output_format'] = 'mp4'
-#     else:
-#         # Fallback to single format if FFmpeg not available
-#         print("⚠ FFmpeg not available - downloading single format only")
-#         opts['format'] = 'best'  # Download best single format (no merging needed)
-
-#     return opts
-
 def ydl_options(progress_cb):
     opts = {
         'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
@@ -108,45 +83,21 @@ def ydl_options(progress_cb):
         'noverifyhttpscert': True,
         'buffersize': 1024 * 64,
         'continuedl': True,
-        
-        'cookiefile': '/cookies.txt',
-        
-        'extract_flat': False,
-        'ignoreerrors': False,
-        
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
-        },
-        
-        'sleep_interval': 1,
-        'max_sleep_interval': 3,
-        'sleep_interval_requests': 1,
-        
-        'retries': 3,
-        'fragment_retries': 3,
-        'skip_unavailable_fragments': False,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        }
     }
     
     if FFMPEG_PATH:
         opts['format'] = 'bestvideo+bestaudio/best'
         opts['merge_output_format'] = 'mp4'
-        opts['postprocessor_args'] = ['-threads', '2']
     else:
+        # Fallback to single format if FFmpeg not available
         print("⚠ FFmpeg not available - downloading single format only")
-        opts['format'] = 'best'
+        opts['format'] = 'best'  # Download best single format (no merging needed)
 
     return opts
+
 
 def download_one(item):
     downloaded_filename = None

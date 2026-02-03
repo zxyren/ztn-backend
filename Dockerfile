@@ -1,6 +1,6 @@
 FROM python:3.13.7-slim
 
-# Install system dependencies
+# Install system dependencies including proper JS runtime
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     gcc \
@@ -10,26 +10,23 @@ RUN apt-get update && apt-get install -y \
     wget \
     curl \
     xz-utils \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && node -v
-
-# Upgrade pip and install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip
 
+# Install Python dependencies (order matters for curl-cffi)
 RUN pip install --no-cache-dir \
+    certifi \
+    brotli \
+    websockets \
+    pycryptodomex \
+    curl-cffi \
+    yt-dlp \
     flask \
     flask-cors \
-    gunicorn \
-    pycryptodomex \
-    websockets \
-    brotli \
-    certifi \
-    curl-cffi
+    gunicorn
 
 WORKDIR /app
 
