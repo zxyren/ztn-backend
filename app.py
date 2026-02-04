@@ -314,6 +314,39 @@ def index():
                 "/api/clear"
             ]
         })
+
+# thumbnail extraction route
+@app.route("/api/thumbnail", methods=["POST"])
+def get_thumbnail():
+    url = (request.get_json(force=True, silent=True) or {}).get("url", "").strip()
+    if not url:
+        return jsonify({"error": "No URL provided"}), 400
+    try:
+        opts = {
+            'quiet': True,
+            'skip_download': True,
+            'socket_timeout': 10,
+            'http_headers': {'User-Agent': 'Mozilla/5.0'}
+        }
+        
+        info = YoutubeDL(opts).extract_info(url, download=False)
+        if not info:
+            return jsonify({"error": "No info"}), 404
+        
+        # Get low quality thumbnail (240-640px)
+        thumbnail = None
+        thumbs = [t for t in info.get('thumbnails', []) if t.get('url')]
+        if thumbs:
+            low_quality = [t for t in thumbs if 240 <= t.get('width', 0) <= 640]
+            thumbnail = (min(low_quality, key=lambda x: abs(x.get('width', 0) - 480))['url'] 
+                        if low_quality else min(thumbs, key=lambda x: x.get('width', 999999))['url'])
+        thumbnail = thumbnail or info.get('thumbnail')
+        if thumbnail:
+            return jsonify({"thumbnail": thumbnail, "title": info.get('title', '')})
+        return jsonify({"error": "No thumbnail"}), 404
+    except Exception as e:
+        print(f"Error: {url} - {e}")
+        return jsonify({"error": str(e)}), 500
     
 # Start workers for Gunicorn & production
 start_workers()
