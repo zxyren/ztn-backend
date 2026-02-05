@@ -12,11 +12,6 @@ import subprocess
 import json
 import logging
 
-YOUTUBE_COOKIES_PATH = "/etc/secrets/youtube_cookies.txt"
-
-def cookies_available():
-    return os.path.exists(YOUTUBE_COOKIES_PATH)
-
 app = Flask(__name__)
 CORS(app)  # Enable CORS for React frontend
 
@@ -78,38 +73,31 @@ def broadcast_update():
             except:
                 sse_clients.remove(client_queue)
 
-def ydl_options(progress_cb, url=None):
+def ydl_options(progress_cb):
     opts = {
         'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
         'progress_hooks': [progress_cb],
         'restrictfilenames': True,
         'windowsfilenames': True,
         'updatetime': False,
-        'no_check_certificate': True,
+        'noverifyhttpscert': True,
         'buffersize': 1024 * 64,
         'continuedl': True,
-        'noplaylist': True,
-        'quiet': True,
+        '--no-check-certificate': True,
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         },
     }
-
-    # ✅ Only apply cookies for YouTube URLs
-    if url and cookies_available() and ("youtube.com" in url or "youtu.be" in url):
-        print("✓ Using YouTube cookies (read-only)")
-        opts['cookiefile'] = YOUTUBE_COOKIES_PATH
-        opts['cookiefile_mode'] = 'r'  # read-only mode
-
+    
     if FFMPEG_PATH:
         opts['format'] = 'bestvideo+bestaudio/best'
         opts['merge_output_format'] = 'mp4'
-        opts['ffmpeg_location'] = FFMPEG_PATH
     else:
-        opts['format'] = 'best'
+        # Fallback to single format if FFmpeg not available
+        print("⚠ FFmpeg not available - downloading single format only")
+        opts['format'] = 'best'  # Download best single format (no merging needed)
 
     return opts
-
 
 
 def download_one(item):
@@ -134,17 +122,17 @@ def download_one(item):
                 nonlocal downloaded_filename
                 downloaded_filename = d['filename']
 
-    # opts = ydl_options(progress_hook)
-    opts = ydl_options(progress_hook, url=item['url'])
-
+    opts = ydl_options(progress_hook)
     try:
         with YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(item['url'], download=True)
-            downloaded_filename = ydl.prepare_filename(info)
-
+            # Extract info first to get the expected filename
+            info = ydl.extract_info(item['url'], download=False)
+            expected_filename = ydl.prepare_filename(info)
+            ydl.download([item['url']])
+        
         # Use the expected filename, or find the most recently modified file as fallback
-        if os.path.exists(downloaded_filename):
-            pass  # Use the downloaded filename as-is
+        if os.path.exists(expected_filename):
+            downloaded_filename = expected_filename
         else:
             # Fallback: Get the most recently modified file in download folder
             files = glob.glob(os.path.join(DOWNLOAD_FOLDER, '*'))
