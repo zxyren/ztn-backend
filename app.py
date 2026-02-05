@@ -12,6 +12,11 @@ import subprocess
 import json
 import logging
 
+YOUTUBE_COOKIES_PATH = "/etc/secrets/youtube_cookies.txt"
+
+def cookies_available():
+    return os.path.exists(YOUTUBE_COOKIES_PATH)
+
 app = Flask(__name__)
 CORS(app)  # Enable CORS for React frontend
 
@@ -80,22 +85,30 @@ def ydl_options(progress_cb):
         'restrictfilenames': True,
         'windowsfilenames': True,
         'updatetime': False,
-        'noverifyhttpscert': True,
+        'no_check_certificate': True,
         'buffersize': 1024 * 64,
         'continuedl': True,
-        '--no-check-certificate': True,
+        'noplaylist': True,
+        'quiet': True,
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.0.0 Safari/537.36'
+            ),
         },
     }
-    
+
+    # ✅ THIS is the fix
+    if cookies_available():
+        opts['cookiefile'] = YOUTUBE_COOKIES_PATH
+
     if FFMPEG_PATH:
         opts['format'] = 'bestvideo+bestaudio/best'
         opts['merge_output_format'] = 'mp4'
+        opts['ffmpeg_location'] = FFMPEG_PATH
     else:
-        # Fallback to single format if FFmpeg not available
-        print("⚠ FFmpeg not available - downloading single format only")
-        opts['format'] = 'best'  # Download best single format (no merging needed)
+        opts['format'] = 'best'
 
     return opts
 
@@ -125,14 +138,12 @@ def download_one(item):
     opts = ydl_options(progress_hook)
     try:
         with YoutubeDL(opts) as ydl:
-            # Extract info first to get the expected filename
-            info = ydl.extract_info(item['url'], download=False)
-            expected_filename = ydl.prepare_filename(info)
-            ydl.download([item['url']])
-        
+            info = ydl.extract_info(item['url'], download=True)
+            downloaded_filename = ydl.prepare_filename(info)
+
         # Use the expected filename, or find the most recently modified file as fallback
-        if os.path.exists(expected_filename):
-            downloaded_filename = expected_filename
+        if os.path.exists(downloaded_filename):
+            pass  # Use the downloaded filename as-is
         else:
             # Fallback: Get the most recently modified file in download folder
             files = glob.glob(os.path.join(DOWNLOAD_FOLDER, '*'))
