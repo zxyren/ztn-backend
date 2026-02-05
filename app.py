@@ -134,7 +134,9 @@ def download_one(item):
                 nonlocal downloaded_filename
                 downloaded_filename = d['filename']
 
-    opts = ydl_options(progress_hook)
+    # opts = ydl_options(progress_hook)
+    opts = ydl_options(progress_hook, url=item['url'])
+
     try:
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(item['url'], download=True)
