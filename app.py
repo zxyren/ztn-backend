@@ -91,17 +91,14 @@ def ydl_options(progress_cb):
         'noplaylist': True,
         'quiet': True,
         'http_headers': {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
-            ),
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         },
     }
 
-    # ✅ THIS is the fix
     if cookies_available():
+        print("✓ Using YouTube cookies (read-only)")
         opts['cookiefile'] = YOUTUBE_COOKIES_PATH
+        opts['cookiefile_mode'] = 'r'  # read-only mode
 
     if FFMPEG_PATH:
         opts['format'] = 'bestvideo+bestaudio/best'
