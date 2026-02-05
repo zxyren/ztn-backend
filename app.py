@@ -78,7 +78,7 @@ def broadcast_update():
             except:
                 sse_clients.remove(client_queue)
 
-def ydl_options(progress_cb):
+def ydl_options(progress_cb, url=None):
     opts = {
         'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
         'progress_hooks': [progress_cb],
@@ -95,7 +95,8 @@ def ydl_options(progress_cb):
         },
     }
 
-    if cookies_available():
+    # ✅ Only apply cookies for YouTube URLs
+    if url and cookies_available() and ("youtube.com" in url or "youtu.be" in url):
         print("✓ Using YouTube cookies (read-only)")
         opts['cookiefile'] = YOUTUBE_COOKIES_PATH
         opts['cookiefile_mode'] = 'r'  # read-only mode
@@ -108,6 +109,7 @@ def ydl_options(progress_cb):
         opts['format'] = 'best'
 
     return opts
+
 
 
 def download_one(item):
