@@ -115,15 +115,17 @@ def ydl_options(progress_cb):
             'Accept-Language': 'en-us,en;q=0.5',
             'Sec-Fetch-Mode': 'navigate',
         },
-        # Add these options to bypass bot detection
+        # Use Android and iOS clients to bypass bot detection
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web'],
-                'player_skip': ['webpage', 'configs'],
+                'player_client': ['android', 'ios'],
+                'player_skip': ['webpage'],
             }
         },
-        # Uncomment this if you have a browser installed on the server
-        # 'cookiesfrombrowser': ('chrome',),  # or 'firefox', 'edge', 'safari'
+        # Additional options to help with bot detection
+        'nocheckcertificate': True,
+        'geo_bypass': True,
+        'age_limit': None,
     }
     
     if FFMPEG_PATH:
