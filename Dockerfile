@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y curl \
 # Install required Python dependencies globally
 RUN pip install --upgrade pip
 RUN pip install \
-    yt-dlp \
+    --upgrade yt-dlp \
     flask \
     flask-cors \
     gunicorn \
