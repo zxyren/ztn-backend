@@ -105,35 +105,27 @@ def ydl_options(progress_cb):
         'restrictfilenames': True,
         'windowsfilenames': True,
         'updatetime': False,
-        'noverifyhttpscert': True,
         'buffersize': 1024 * 64,
         'continuedl': True,
-        '--no-check-certificate': True,
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us,en;q=0.5',
-            'Sec-Fetch-Mode': 'navigate',
+            'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
         },
-        # Use Android and iOS clients to bypass bot detection
+        # Try multiple clients in order
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'ios'],
-                'player_skip': ['webpage'],
+                'player_client': ['ios', 'mweb', 'android'],
+                'player_skip': ['webpage', 'configs', 'js'],
             }
         },
-        # Additional options to help with bot detection
-        'nocheckcertificate': True,
-        'geo_bypass': True,
-        'age_limit': None,
     }
     
     if FFMPEG_PATH:
-        opts['format'] = 'bestvideo+bestaudio/best'
+        # Use format that doesn't require premium/sign-in
+        opts['format'] = 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best'
         opts['merge_output_format'] = 'mp4'
     else:
         print("⚠ FFmpeg not available - downloading single format only")
-        opts['format'] = 'best'
+        opts['format'] = 'best[ext=mp4]/best'
 
     return opts
 
