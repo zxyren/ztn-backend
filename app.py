@@ -73,31 +73,6 @@ def broadcast_update():
             except:
                 sse_clients.remove(client_queue)
 
-# def ydl_options(progress_cb):
-#     opts = {
-#         'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
-#         'progress_hooks': [progress_cb],
-#         'restrictfilenames': True,
-#         'windowsfilenames': True,
-#         'updatetime': False,
-#         'noverifyhttpscert': True,
-#         'buffersize': 1024 * 64,
-#         'continuedl': True,
-#         '--no-check-certificate': True,
-#         'http_headers': {
-#             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-#         },
-#     }
-    
-#     if FFMPEG_PATH:
-#         opts['format'] = 'bestvideo+bestaudio/best'
-#         opts['merge_output_format'] = 'mp4'
-#     else:
-#         # Fallback to single format if FFmpeg not available
-#         print("⚠ FFmpeg not available - downloading single format only")
-#         opts['format'] = 'best'  # Download best single format (no merging needed)
-
-#     return opts
 def ydl_options(progress_cb):
     opts = {
         'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
@@ -105,27 +80,22 @@ def ydl_options(progress_cb):
         'restrictfilenames': True,
         'windowsfilenames': True,
         'updatetime': False,
+        'noverifyhttpscert': True,
         'buffersize': 1024 * 64,
         'continuedl': True,
+        '--no-check-certificate': True,
         'http_headers': {
-            'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
-        },
-        # Try multiple clients in order
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['ios', 'mweb', 'android'],
-                'player_skip': ['webpage', 'configs', 'js'],
-            }
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         },
     }
     
     if FFMPEG_PATH:
-        # Use format that doesn't require premium/sign-in
-        opts['format'] = 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best'
+        opts['format'] = 'bestvideo+bestaudio/best'
         opts['merge_output_format'] = 'mp4'
     else:
+        # Fallback to single format if FFmpeg not available
         print("⚠ FFmpeg not available - downloading single format only")
-        opts['format'] = 'best[ext=mp4]/best'
+        opts['format'] = 'best'  # Download best single format (no merging needed)
 
     return opts
 
