@@ -89,15 +89,17 @@ def ydl_options(progress_cb, format_type='video'):
     }
 
     if format_type == 'audio':
+        if not FFMPEG_PATH:
+            raise Exception(
+                "FFmpeg is not installed. MP3 conversion requires FFmpeg. "
+                "Install it via: apt-get install ffmpeg (Linux) or brew install ffmpeg (macOS)"
+            )
         opts['format'] = 'bestaudio/best'
-        if FFMPEG_PATH:
-            opts['postprocessors'] = [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }]
-        else:
-            print("⚠ FFmpeg missing — audio downloads in original format (not MP3)")
+        opts['postprocessors'] = [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }]
     else:
         if FFMPEG_PATH:
             opts['format'] = 'bestvideo+bestaudio/best'
@@ -130,7 +132,15 @@ def download_one(item):
             if 'filename' in d:
                 downloaded_filename = d['filename']
 
-    opts = ydl_options(progress_hook, format_type)
+    try:
+        opts = ydl_options(progress_hook, format_type)
+    except Exception as e:
+        # FFmpeg missing or other configuration error
+        with state_lock:
+            item['status'] = 'Error'
+            item['error'] = str(e)
+        broadcast_update()
+        return
 
     try:
         with YoutubeDL(opts) as ydl:
@@ -138,32 +148,41 @@ def download_one(item):
             expected_filename = ydl.prepare_filename(info)
             ydl.download([item['url']])
 
-        # Resolve final path — MP3 replaces original extension after FFmpeg post-processing
+        # For audio, look for .mp3 specifically (post-processor should create it)
         if format_type == 'audio':
             base = os.path.splitext(expected_filename)[0]
             mp3_path = base + '.mp3'
             if os.path.exists(mp3_path):
                 downloaded_filename = mp3_path
             else:
-                candidates = glob.glob(base + '*.mp3') + glob.glob(
-                    os.path.join(DOWNLOAD_FOLDER, '*.mp3')
-                )
-                if candidates:
-                    downloaded_filename = max(candidates, key=os.path.getmtime)
+                # Fallback: search for any recent .mp3 file
+                mp3_files = glob.glob(os.path.join(DOWNLOAD_FOLDER, '*.mp3'))
+                if mp3_files:
+                    downloaded_filename = max(mp3_files, key=os.path.getmtime)
+                else:
+                    raise Exception("MP3 file was not created — FFmpeg post-processor may have failed")
         else:
+            # For video/image, use expected filename if it exists
             if os.path.exists(expected_filename):
                 downloaded_filename = expected_filename
+            else:
+                # Fallback: newest file
+                files = glob.glob(os.path.join(DOWNLOAD_FOLDER, '*'))
+                files = [f for f in files if os.path.isfile(f)]
+                if files:
+                    downloaded_filename = max(files, key=os.path.getmtime)
 
-        # Fallback: newest file in folder
         if not downloaded_filename or not os.path.exists(str(downloaded_filename)):
-            files = glob.glob(os.path.join(DOWNLOAD_FOLDER, '*'))
-            if files:
-                downloaded_filename = max(files, key=os.path.getmtime)
+            raise Exception("Downloaded file not found")
+
+        file_size = os.path.getsize(str(downloaded_filename))
+        if file_size < 1024:  # Less than 1KB is suspicious
+            raise Exception(f"File too small ({file_size} bytes) — download may have failed")
 
         with state_lock:
             item['status'] = 'Completed'
-            item['filename'] = os.path.basename(downloaded_filename) if downloaded_filename else None
-            item['filepath'] = str(downloaded_filename) if downloaded_filename else None
+            item['filename'] = os.path.basename(str(downloaded_filename))
+            item['filepath'] = str(downloaded_filename)
             downloads['completed'] += 1
         broadcast_update()
 
