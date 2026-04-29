@@ -90,27 +90,15 @@ def ydl_options(progress_cb, format_type='video'):
 
     if format_type == 'audio':
         if not FFMPEG_PATH:
-            raise Exception(
-                "FFmpeg is not installed. MP3 conversion requires FFmpeg."
-            )
-        # Download the best audio-only format (usually m4a/opus/webm)
-        # These are already compressed audio streams — no video to strip.
-        # FFmpeg then remuxes into MP3 container.
-        # Key fix: postprocessor_args '-c:a copy' tells FFmpeg to COPY the
-        # audio stream as-is instead of re-encoding it, making it nearly instant.
-        # If the source is already mp3-compatible (AAC/MP3), this is lossless and instant.
-        # For opus/vorbis sources, FFmpeg will still need to transcode but
-        # preferring m4a format below gives us AAC which copies much faster.
-        opts['format'] = 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio'
+            raise Exception("FFmpeg is required for audio extraction.")
+
+        opts['format'] = 'bestaudio/best'   # ← KEY FIX (fallback included)
+
         opts['postprocessors'] = [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
-            'preferredquality': '0',  # 0 = use source quality, no re-encode quality loss
+            'preferredquality': '192',
         }]
-        # Tell FFmpeg to use copy mode when possible — avoids full re-encode
-        opts['postprocessor_args'] = {
-            'ffmpegextractaudio': ['-c:a', 'copy']
-        }
     else:
         if FFMPEG_PATH:
             opts['format'] = 'bestvideo+bestaudio/best'
