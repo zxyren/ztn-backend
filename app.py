@@ -52,6 +52,7 @@ downloads = {
 next_id = 1
 task_queue = Queue()
 state_lock = threading.Lock()
+cancelled_ids = set()
 
 sse_clients = []
 sse_lock = threading.Lock()
@@ -115,6 +116,11 @@ def download_one(item):
 
     def progress_hook(d):
         nonlocal downloaded_filename
+        # Check if download was cancelled
+        with state_lock:
+            if item['id'] in cancelled_ids:
+                raise Exception("Download cancelled by user")
+        
         if d['status'] == 'downloading':
             total = d.get('total_bytes') or d.get('total_bytes_estimate')
             if total:
@@ -182,10 +188,18 @@ def download_one(item):
         broadcast_update()
 
     except Exception as e:
+        error_msg = str(e)
+        is_cancelled = "cancelled" in error_msg.lower()
         print(f"--- DOWNLOAD FAILED: {e} ---")
         with state_lock:
-            item['status'] = 'Error'
-            item['error'] = str(e)
+            item['status'] = 'Cancelled' if is_cancelled else 'Error'
+            item['error'] = error_msg
+            # Clean up partial file if download was cancelled
+            if is_cancelled and downloaded_filename and os.path.exists(str(downloaded_filename)):
+                try:
+                    os.remove(str(downloaded_filename))
+                except Exception:
+                    pass
         broadcast_update()
 
 
@@ -196,6 +210,13 @@ def worker_loop():
             break
 
         with state_lock:
+            # Skip if already cancelled before even starting
+            if item_id in cancelled_ids:
+                downloads['downloading'] -= 1 if item_id not in cancelled_ids or downloads['downloading'] > 0 else 0
+                task_queue.task_done()
+                broadcast_update()
+                continue
+            
             downloads['downloading'] += 1
             item = next(
                 (x for x in downloads['queue'] if x['id'] == item_id and x['status'] == 'Queued'),
@@ -212,6 +233,8 @@ def worker_loop():
 
         with state_lock:
             downloads['downloading'] -= 1
+            # Remove from cancelled set after download is done
+            cancelled_ids.discard(item_id)
         broadcast_update()
         task_queue.task_done()
 
@@ -337,6 +360,26 @@ def download_file(item_id):
     )
 
 
+@app.route("/api/cancel/<int:item_id>", methods=["POST"])
+def cancel_download(item_id):
+    with state_lock:
+        item = next((x for x in downloads['queue'] if x['id'] == item_id), None)
+        if not item:
+            return jsonify({"error": "Item not found"}), 404
+        
+        # Mark as cancelled
+        cancelled_ids.add(item_id)
+        
+        # If already completed or failed, just mark as cancelled
+        if item['status'] in ['Completed', 'Error', 'Cancelled']:
+            item['status'] = 'Cancelled'
+        else:
+            item['status'] = 'Cancelling'
+    
+    broadcast_update()
+    return jsonify({"success": True, "message": "Download cancelled"})
+
+
 @app.route("/api/clear", methods=["POST"])
 def clear_downloads():
     global next_id
@@ -355,6 +398,7 @@ def clear_downloads():
         downloads['downloading'] = 0
         downloads['queue'] = []
         next_id = 1
+        cancelled_ids.clear()
 
         while not task_queue.empty():
             try:
