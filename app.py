@@ -13,62 +13,67 @@ import json
 import logging
 
 app = Flask(__name__)
-CORS(app)
 
-log = logging.getLogger('werkzeug')
-log.setLevel(logging.ERROR)
+# Allow X-Session-ID header from any origin
+CORS(app, supports_credentials=True, allow_headers=["Content-Type", "X-Session-ID"])
+
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 DOWNLOAD_FOLDER = tempfile.mkdtemp(prefix="video_downloader_")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-print(f"✓ Temporary download folder: {DOWNLOAD_FOLDER}")
+print(f"✓ Download folder: {DOWNLOAD_FOLDER}")
 
 
 def detect_ffmpeg():
-    ffmpeg_path = shutil.which("ffmpeg")
-    if ffmpeg_path:
-        print(f"✓ FFmpeg detected at {ffmpeg_path}")
-        return ffmpeg_path
+    path = shutil.which("ffmpeg")
+    if path:
+        print(f"✓ FFmpeg: {path}")
+        return path
     try:
-        result = subprocess.run(
-            ["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-        if result.returncode == 0:
+        if subprocess.run(["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE).returncode == 0:
             return "ffmpeg"
     except Exception:
         pass
-    print("⚠ FFmpeg not found — MP3 conversion and video merging unavailable")
+    print("⚠ FFmpeg not found")
     return None
 
 
 FFMPEG_PATH = detect_ffmpeg()
-MAX_CONCURRENT = 1
+MAX_CONCURRENT = 2
 
-downloads = {
-    "total": 0,
-    "completed": 0,
-    "downloading": 0,
-    "queue": []
-}
-next_id = 1
+# ---------------------------------------------------------------------------
+# Per-session state  { session_id -> { total, completed, downloading, queue } }
+# ---------------------------------------------------------------------------
+sessions = {}
+session_lock = threading.Lock()
+
 task_queue = Queue()
-state_lock = threading.Lock()
+next_ids = {}
 
-sse_clients = []
+sse_clients = {}
 sse_lock = threading.Lock()
 
 
-def broadcast_update():
-    with state_lock:
-        data = json.dumps(downloads)
+def get_session(session_id):
+    with session_lock:
+        if session_id not in sessions:
+            sessions[session_id] = {"total": 0, "completed": 0, "downloading": 0, "queue": []}
+            next_ids[session_id] = 1
+        return sessions[session_id]
+
+
+def broadcast(session_id):
+    with session_lock:
+        data = json.dumps(sessions.get(session_id, {}))
     with sse_lock:
-        for client_queue in sse_clients[:]:
+        for q in sse_clients.get(session_id, [])[:]:
             try:
-                client_queue.put(data)
+                q.put(data)
             except Exception:
-                sse_clients.remove(client_queue)
+                pass
 
 
-def ydl_options(progress_cb, format_type='video'):
+def ydl_opts(progress_cb, format_type):
     opts = {
         'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
         'progress_hooks': [progress_cb],
@@ -77,147 +82,150 @@ def ydl_options(progress_cb, format_type='video'):
         'updatetime': False,
         'noverifyhttpscert': True,
         'buffersize': 1024 * 64,
-        'continuedl': True,
-        '--no-check-certificate': True,
         'http_headers': {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
-            ),
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         },
     }
-
     if format_type == 'audio':
         if not FFMPEG_PATH:
-            raise Exception(
-                "FFmpeg is not installed. MP3 conversion requires FFmpeg. "
-                "Install it via: apt-get install ffmpeg (Linux) or brew install ffmpeg (macOS)"
-            )
-        opts['format'] = 'bestaudio/best'
-        opts['postprocessors'] = [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }]
+            raise Exception("FFmpeg not installed — required for MP3 conversion")
+        opts['format'] = 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio'
+        opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '0'}]
+        opts['postprocessor_args'] = {'ffmpegextractaudio': ['-c:a', 'copy']}
     else:
+        opts['format'] = 'bestvideo+bestaudio/best' if FFMPEG_PATH else 'best'
         if FFMPEG_PATH:
-            opts['format'] = 'bestvideo+bestaudio/best'
             opts['merge_output_format'] = 'mp4'
-        else:
-            opts['format'] = 'best'
-
     return opts
 
 
-def download_one(item):
+def find_item(session_id, item_id):
+    d = sessions.get(session_id)
+    if not d:
+        return None
+    return next((x for x in d['queue'] if x['id'] == item_id), None)
+
+
+def download_one(session_id, item_id):
     downloaded_filename = None
+
+    with session_lock:
+        item = find_item(session_id, item_id)
+        if not item or item['status'] == 'Cancelled':
+            return
+
     format_type = item.get('format', 'video')
 
     def progress_hook(d):
         nonlocal downloaded_filename
+        with session_lock:
+            it = find_item(session_id, item_id)
+            if not it or it['status'] == 'Cancelled':
+                raise Exception("Cancelled by user")
         if d['status'] == 'downloading':
             total = d.get('total_bytes') or d.get('total_bytes_estimate')
             if total:
-                pct = d.get('downloaded_bytes', 0) * 100.0 / total
-                with state_lock:
-                    item['progress'] = max(0.0, min(100.0, round(pct, 1)))
-                    item['status'] = 'Downloading'
-                broadcast_update()
+                pct = round(d.get('downloaded_bytes', 0) * 100.0 / total, 1)
+                with session_lock:
+                    it = find_item(session_id, item_id)
+                    if it:
+                        it['progress'] = max(0.0, min(100.0, pct))
+                        it['status'] = 'Downloading'
+                broadcast(session_id)
         elif d['status'] == 'finished':
-            with state_lock:
-                item['progress'] = 100.0
-                item['status'] = 'Processing' if format_type == 'audio' else 'Merging'
-            broadcast_update()
+            with session_lock:
+                it = find_item(session_id, item_id)
+                if it:
+                    it['progress'] = 100.0
+                    it['status'] = 'Converting' if format_type == 'audio' else 'Merging'
+            broadcast(session_id)
             if 'filename' in d:
                 downloaded_filename = d['filename']
 
     try:
-        opts = ydl_options(progress_hook, format_type)
+        opts = ydl_opts(progress_hook, format_type)
     except Exception as e:
-        # FFmpeg missing or other configuration error
-        with state_lock:
-            item['status'] = 'Error'
-            item['error'] = str(e)
-        broadcast_update()
+        with session_lock:
+            it = find_item(session_id, item_id)
+            if it:
+                it['status'] = 'Error'
+                it['error'] = str(e)
+        broadcast(session_id)
         return
 
     try:
         with YoutubeDL(opts) as ydl:
+            with session_lock:
+                it = find_item(session_id, item_id)
+                if not it or it['status'] == 'Cancelled':
+                    return
             info = ydl.extract_info(item['url'], download=False)
             expected_filename = ydl.prepare_filename(info)
             ydl.download([item['url']])
 
-        # For audio, look for .mp3 specifically (post-processor should create it)
         if format_type == 'audio':
             base = os.path.splitext(expected_filename)[0]
             mp3_path = base + '.mp3'
             if os.path.exists(mp3_path):
                 downloaded_filename = mp3_path
             else:
-                # Fallback: search for any recent .mp3 file
-                mp3_files = glob.glob(os.path.join(DOWNLOAD_FOLDER, '*.mp3'))
-                if mp3_files:
-                    downloaded_filename = max(mp3_files, key=os.path.getmtime)
-                else:
-                    raise Exception("MP3 file was not created — FFmpeg post-processor may have failed")
+                mp3s = glob.glob(os.path.join(DOWNLOAD_FOLDER, '*.mp3'))
+                downloaded_filename = max(mp3s, key=os.path.getmtime) if mp3s else None
         else:
-            # For video/image, use expected filename if it exists
             if os.path.exists(expected_filename):
                 downloaded_filename = expected_filename
             else:
-                # Fallback: newest file
-                files = glob.glob(os.path.join(DOWNLOAD_FOLDER, '*'))
-                files = [f for f in files if os.path.isfile(f)]
-                if files:
-                    downloaded_filename = max(files, key=os.path.getmtime)
+                files = [f for f in glob.glob(os.path.join(DOWNLOAD_FOLDER, '*')) if os.path.isfile(f)]
+                downloaded_filename = max(files, key=os.path.getmtime) if files else None
 
         if not downloaded_filename or not os.path.exists(str(downloaded_filename)):
-            raise Exception("Downloaded file not found")
+            raise Exception("Output file not found after download")
+        if os.path.getsize(str(downloaded_filename)) < 1024:
+            raise Exception("Output file too small — download likely failed")
 
-        file_size = os.path.getsize(str(downloaded_filename))
-        if file_size < 1024:  # Less than 1KB is suspicious
-            raise Exception(f"File too small ({file_size} bytes) — download may have failed")
-
-        with state_lock:
-            item['status'] = 'Completed'
-            item['filename'] = os.path.basename(str(downloaded_filename))
-            item['filepath'] = str(downloaded_filename)
-            downloads['completed'] += 1
-        broadcast_update()
+        with session_lock:
+            it = find_item(session_id, item_id)
+            if it and it['status'] != 'Cancelled':
+                it['status'] = 'Completed'
+                it['filename'] = os.path.basename(str(downloaded_filename))
+                it['filepath'] = str(downloaded_filename)
+                sessions[session_id]['completed'] += 1
+        broadcast(session_id)
 
     except Exception as e:
-        print(f"--- DOWNLOAD FAILED: {e} ---")
-        with state_lock:
-            item['status'] = 'Error'
-            item['error'] = str(e)
-        broadcast_update()
+        err = str(e)
+        with session_lock:
+            it = find_item(session_id, item_id)
+            if it and it['status'] != 'Cancelled':
+                it['status'] = 'Error'
+                it['error'] = err
+        broadcast(session_id)
+        print(f"FAILED [{session_id[:8]}] {err}")
 
 
 def worker_loop():
     while True:
-        item_id = task_queue.get()
-        if item_id is None:
-            break
+        session_id, item_id = task_queue.get()
+        with session_lock:
+            d = sessions.get(session_id)
+            if d:
+                d['downloading'] += 1
+            it = find_item(session_id, item_id)
+            if it and it['status'] == 'Queued':
+                it['status'] = 'Starting'
+        broadcast(session_id)
 
-        with state_lock:
-            downloads['downloading'] += 1
-            item = next(
-                (x for x in downloads['queue'] if x['id'] == item_id and x['status'] == 'Queued'),
-                None
-            )
-            if item:
-                item['status'] = 'Starting'
-        broadcast_update()
+        with session_lock:
+            it = find_item(session_id, item_id)
+        if it and it['status'] != 'Cancelled':
+            download_one(session_id, item_id)
 
-        if item:
-            download_one(item)
-
-        time.sleep(0.2)
-
-        with state_lock:
-            downloads['downloading'] -= 1
-        broadcast_update()
+        time.sleep(0.1)
+        with session_lock:
+            d = sessions.get(session_id)
+            if d:
+                d['downloading'] = max(0, d['downloading'] - 1)
+        broadcast(session_id)
         task_queue.task_done()
 
 
@@ -226,207 +234,180 @@ def start_workers():
         threading.Thread(target=worker_loop, daemon=True).start()
 
 
+def session_id_from_request():
+    # Accept from header OR query param (query param fallback for SSE/EventSource)
+    return (request.headers.get('X-Session-ID') or '').strip() or request.args.get('session_id', '').strip()
+
+
+def enqueue_urls(session_id, urls, format_type):
+    added = []
+    with session_lock:
+        d = get_session(session_id)
+        for raw in urls:
+            url = (raw or '').strip()
+            if not url:
+                continue
+            item_id = next_ids[session_id]
+            next_ids[session_id] += 1
+            item = {'id': item_id, 'url': url, 'status': 'Queued', 'progress': 0.0, 'format': format_type}
+            d['queue'].append(item)
+            d['total'] += 1
+            added.append(item_id)
+    for item_id in added:
+        task_queue.put((session_id, item_id))
+    broadcast(session_id)
+    with session_lock:
+        return dict(sessions[session_id])
+
+
 # ---------------------------------------------------------------------------
-# API Routes
+# Routes
 # ---------------------------------------------------------------------------
 
 @app.route("/api/queue", methods=["POST"])
 def queue_download():
-    global next_id
+    sid = session_id_from_request()
+    if not sid:
+        return jsonify({"error": "Missing X-Session-ID"}), 400
     data = request.get_json(force=True, silent=True) or {}
-    urls = data.get("urls", [])
-    format_type = data.get("format", "video")
-
-    with state_lock:
-        for raw_url in urls:
-            url = (raw_url or "").strip()
-            if not url:
-                continue
-            item = {
-                "id": next_id,
-                "url": url,
-                "status": "Queued",
-                "progress": 0.0,
-                "format": format_type,
-            }
-            next_id += 1
-            downloads['queue'].append(item)
-            downloads['total'] += 1
-            task_queue.put(item["id"])
-
-    broadcast_update()
-    return jsonify(downloads)
+    return jsonify(enqueue_urls(sid, data.get("urls", []), data.get("format", "video")))
 
 
 @app.route("/api/upload", methods=["POST"])
 def upload_file():
-    global next_id
+    sid = session_id_from_request()
+    if not sid:
+        return jsonify({"error": "Missing X-Session-ID"}), 400
     f = request.files.get("file")
     if not f:
         return jsonify({"error": "No file"}), 400
-
     format_type = request.form.get("format", "video")
-    lines = [
-        ln.strip()
-        for ln in f.read().decode("utf-8", errors="ignore").splitlines()
-        if ln.strip()
-    ]
-
-    with state_lock:
-        for url in lines:
-            item = {
-                "id": next_id,
-                "url": url,
-                "status": "Queued",
-                "progress": 0.0,
-                "format": format_type,
-            }
-            next_id += 1
-            downloads['queue'].append(item)
-            downloads['total'] += 1
-            task_queue.put(item["id"])
-
-    broadcast_update()
-    return jsonify(downloads)
+    lines = [l.strip() for l in f.read().decode("utf-8", errors="ignore").splitlines() if l.strip()]
+    return jsonify(enqueue_urls(sid, lines, format_type))
 
 
 @app.route("/api/status")
 def status():
-    with state_lock:
-        return jsonify(downloads)
+    sid = session_id_from_request()
+    if not sid:
+        return jsonify({"error": "Missing X-Session-ID"}), 400
+    return jsonify(get_session(sid))
+
+
+@app.route("/api/cancel/<int:item_id>", methods=["POST"])
+def cancel_download(item_id):
+    sid = session_id_from_request()
+    if not sid:
+        return jsonify({"error": "Missing X-Session-ID"}), 400
+    with session_lock:
+        it = find_item(sid, item_id)
+        if not it:
+            return jsonify({"error": "Item not found"}), 404
+        if it['status'] in ('Completed', 'Error', 'Cancelled'):
+            return jsonify({"error": f"Cannot cancel — status is {it['status']}"}), 400
+        it['status'] = 'Cancelled'
+    broadcast(sid)
+    with session_lock:
+        return jsonify(dict(sessions[sid]))
 
 
 @app.route("/api/events")
 def events():
-    def event_stream():
-        client_queue = Queue()
+    sid = session_id_from_request()
+    if not sid:
+        return Response("data: {}\n\n", mimetype="text/event-stream")
+
+    def stream():
+        q = Queue()
         with sse_lock:
-            sse_clients.append(client_queue)
+            sse_clients.setdefault(sid, []).append(q)
         try:
-            with state_lock:
-                data = json.dumps(downloads)
-            yield f"data: {data}\n\n"
+            with session_lock:
+                initial = json.dumps(sessions.get(sid, {}))
+            yield f"data: {initial}\n\n"
             while True:
-                data = client_queue.get()
-                yield f"data: {data}\n\n"
+                yield f"data: {q.get()}\n\n"
         except GeneratorExit:
             with sse_lock:
-                if client_queue in sse_clients:
-                    sse_clients.remove(client_queue)
+                clients = sse_clients.get(sid, [])
+                if q in clients:
+                    clients.remove(q)
 
-    return Response(
-        event_stream(),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return Response(stream(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.route("/api/download/<int:item_id>")
 def download_file(item_id):
-    with state_lock:
-        item = next((x for x in downloads['queue'] if x['id'] == item_id), None)
-
-    if not item:
+    sid = session_id_from_request()
+    if not sid:
+        return jsonify({"error": "Missing session"}), 400
+    with session_lock:
+        it = find_item(sid, item_id)
+    if not it:
         return jsonify({"error": "Item not found"}), 404
-    if item['status'] != 'Completed':
-        return jsonify({"error": "File not ready yet"}), 400
-
-    filepath = item.get('filepath')
-    if not filepath or not os.path.exists(filepath):
+    if it['status'] != 'Completed':
+        return jsonify({"error": "Not ready"}), 400
+    fp = it.get('filepath')
+    if not fp or not os.path.exists(fp):
         return jsonify({"error": "File missing on disk"}), 404
-
-    return send_file(
-        filepath,
-        as_attachment=True,
-        download_name=item.get('filename', 'download')
-    )
+    return send_file(fp, as_attachment=True, download_name=it.get('filename', 'download'))
 
 
 @app.route("/api/clear", methods=["POST"])
 def clear_downloads():
-    global next_id
-
-    with state_lock:
-        for item in downloads['queue']:
-            fp = item.get('filepath')
+    sid = session_id_from_request()
+    if not sid:
+        return jsonify({"error": "Missing session"}), 400
+    with session_lock:
+        d = sessions.get(sid, {})
+        for it in d.get('queue', []):
+            fp = it.get('filepath')
             if fp and os.path.exists(fp):
                 try:
                     os.remove(fp)
                 except Exception:
                     pass
-
-        downloads['total'] = 0
-        downloads['completed'] = 0
-        downloads['downloading'] = 0
-        downloads['queue'] = []
-        next_id = 1
-
-        while not task_queue.empty():
-            try:
-                task_queue.get_nowait()
-            except Exception:
-                break
-
-    broadcast_update()
-    return jsonify(downloads)
+        sessions[sid] = {"total": 0, "completed": 0, "downloading": 0, "queue": []}
+        next_ids[sid] = 1
+    broadcast(sid)
+    with session_lock:
+        return jsonify(sessions[sid])
 
 
 @app.route("/api/thumbnail", methods=["POST"])
 def get_thumbnail():
     url = (request.get_json(force=True, silent=True) or {}).get("url", "").strip()
     if not url:
-        return jsonify({"error": "No URL provided"}), 400
+        return jsonify({"error": "No URL"}), 400
     try:
-        opts = {
-            'quiet': True,
-            'skip_download': True,
-            'socket_timeout': 10,
-            'http_headers': {'User-Agent': 'Mozilla/5.0'},
-        }
-        info = YoutubeDL(opts).extract_info(url, download=False)
+        info = YoutubeDL({'quiet': True, 'skip_download': True, 'socket_timeout': 10}).extract_info(url, download=False)
         if not info:
-            return jsonify({"error": "No info returned"}), 404
-
-        thumbnail = None
+            return jsonify({"error": "No info"}), 404
         thumbs = [t for t in info.get('thumbnails', []) if t.get('url')]
+        thumbnail = None
         if thumbs:
             low_q = [t for t in thumbs if 240 <= t.get('width', 0) <= 640]
-            thumbnail = (
-                min(low_q, key=lambda x: abs(x.get('width', 0) - 480))['url']
-                if low_q
-                else min(thumbs, key=lambda x: x.get('width', 999999))['url']
-            )
+            thumbnail = (min(low_q, key=lambda x: abs(x.get('width', 0) - 480))['url']
+                         if low_q else min(thumbs, key=lambda x: x.get('width', 999999))['url'])
         thumbnail = thumbnail or info.get('thumbnail')
         if thumbnail:
             return jsonify({"thumbnail": thumbnail, "title": info.get('title', '')})
-        return jsonify({"error": "No thumbnail found"}), 404
+        return jsonify({"error": "No thumbnail"}), 404
     except Exception as e:
-        print(f"Thumbnail error [{url}]: {e}")
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/")
 def index():
     try:
-        with open(os.path.join(os.path.dirname(__file__), 'index.html'), 'r') as f:
+        with open(os.path.join(os.path.dirname(__file__), 'index.html')) as f:
             return f.read()
     except Exception:
-        return jsonify({
-            "message": "Video Downloader API is running",
-            "endpoints": [
-                "GET  /api/status",
-                "GET  /api/events  (SSE)",
-                "POST /api/queue",
-                "POST /api/upload",
-                "GET  /api/download/<id>",
-                "POST /api/clear",
-                "POST /api/thumbnail",
-            ]
-        })
+        return jsonify({"message": "Video Downloader API running"})
 
 
 start_workers()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
