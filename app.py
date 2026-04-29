@@ -1,11 +1,12 @@
-import os, threading, time, tempfile, glob, json, logging, shutil, subprocess
+import os, threading, time, tempfile, glob, json, logging, shutil, subprocess, uuid
 from queue import Queue
-from flask import Flask, request, jsonify, send_file, Response
+from flask import Flask, request, jsonify, send_file, Response, session as flask_session
 from flask_cors import CORS
 from yt_dlp import YoutubeDL
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, supports_credentials=True)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 DOWNLOAD_FOLDER = tempfile.mkdtemp(prefix="ydl_")
@@ -25,10 +26,11 @@ MAX_CONCURRENT = 1
 state_lock = threading.Lock()
 sse_lock = threading.Lock()
 task_queue = Queue()
-sse_clients = []
+sse_clients_by_session = {}  # session_id -> [Queue(), ...]
 cancelled_ids = set()
 next_id = 1
-downloads = {"total": 0, "completed": 0, "downloading": 0, "queue": []}
+downloads_by_session = {}  # session_id -> {"total":..,"completed":..,"downloading":..,"queue":[...]} 
+items_by_id = {}  # item_id -> item dict (includes session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -37,17 +39,44 @@ downloads = {"total": 0, "completed": 0, "downloading": 0, "queue": []}
 
 def broadcast():
     with state_lock:
-        data = json.dumps(downloads)
+        snapshots = {sid: st.copy() for sid, st in downloads_by_session.items()}
     with sse_lock:
-        for q in sse_clients[:]:
-            try:
-                q.put(data)
-            except Exception:
-                sse_clients.remove(q)
+        for sid, clients in sse_clients_by_session.items():
+            st = snapshots.get(sid)
+            if st is None:
+                continue
+            data = json.dumps(st)
+            for q in clients[:]:
+                try:
+                    q.put(data)
+                except Exception:
+                    if q in clients:
+                        clients.remove(q)
 
 
 def get_item(item_id):
-    return next((x for x in downloads["queue"] if x["id"] == item_id), None)
+    return items_by_id.get(item_id)
+
+
+def ensure_session_downloads(session_id: str):
+    session_id = session_id or "unknown"
+    return downloads_by_session.setdefault(
+        session_id, {"total": 0, "completed": 0, "downloading": 0, "queue": []}
+    )
+
+
+def get_session_id(create_if_missing: bool = True) -> str:
+    sid = flask_session.get("session_id")
+    if sid:
+        return str(sid)
+    provided = (request.headers.get("X-Session-ID") or request.args.get("session_id", "")).strip()
+    if provided:
+        flask_session["session_id"] = provided
+        return provided
+    if not create_if_missing:
+        return ""
+    flask_session["session_id"] = uuid.uuid4().hex
+    return flask_session["session_id"]
 
 
 def build_ydl_opts(progress_hook, format_type):
@@ -91,6 +120,7 @@ def build_ydl_opts(progress_hook, format_type):
 
 def download_one(item):
     item_id = item["id"]
+    session_id = item.get("session_id") or "unknown"
     format_type = item.get("format", "video")
     final_file = None
 
@@ -152,7 +182,7 @@ def download_one(item):
             item["status"] = "Completed"
             item["filename"] = os.path.basename(final_file)
             item["filepath"] = final_file
-            downloads["completed"] += 1
+            ensure_session_downloads(session_id)["completed"] += 1
         broadcast()
 
     except Exception as e:
@@ -174,20 +204,26 @@ def worker_loop():
 
         with state_lock:
             if item_id in cancelled_ids:
+                cancelled_ids.discard(item_id)
                 task_queue.task_done()
                 continue
-            downloads["downloading"] += 1
             item = get_item(item_id)
+            session_id = item.get("session_id") if item else "unknown"
+            ensure_session_downloads(session_id)["downloading"] += 1
             if item and item["status"] == "Queued":
                 item["status"] = "Starting"
-        broadcast()
+        # Broadcast outside state_lock (broadcast() itself takes state_lock).
+        if item:
+            broadcast()
 
         if item:
             download_one(item)
 
         time.sleep(0.1)
         with state_lock:
-            downloads["downloading"] = max(0, downloads["downloading"] - 1)
+            st = downloads_by_session.get(session_id)
+            if st:
+                st["downloading"] = max(0, st["downloading"] - 1)
             cancelled_ids.discard(item_id)
         broadcast()
         task_queue.task_done()
@@ -203,8 +239,7 @@ def start_workers():
 # ---------------------------------------------------------------------------
 
 def sid():
-    """Get session_id from header or query param."""
-    return (request.headers.get("X-Session-ID") or request.args.get("session_id", "")).strip()
+    return get_session_id(True)
 
 
 @app.route("/api/queue", methods=["POST"])
@@ -212,62 +247,75 @@ def queue_download():
     global next_id
     data = request.get_json(force=True, silent=True) or {}
     format_type = data.get("format", "video")
+    session_id = sid()
     with state_lock:
+        st = ensure_session_downloads(session_id)
         for url in [u.strip() for u in data.get("urls", []) if u.strip()]:
-            item = {"id": next_id, "url": url, "status": "Queued", "progress": 0.0, "format": format_type}
-            downloads["queue"].append(item)
-            downloads["total"] += 1
+            item = {"id": next_id, "session_id": session_id, "url": url, "status": "Queued", "progress": 0.0, "format": format_type}
+            st["queue"].append(item)
+            st["total"] += 1
+            items_by_id[next_id] = item
             task_queue.put(next_id)
             next_id += 1
     broadcast()
-    return jsonify(downloads)
+    return jsonify(st)
 
 
 @app.route("/api/upload", methods=["POST"])
 def upload_file():
     global next_id
+    session_id = sid()
     f = request.files.get("file")
     if not f:
         return jsonify({"error": "No file"}), 400
     format_type = request.form.get("format", "video")
     lines = [l.strip() for l in f.read().decode("utf-8", errors="ignore").splitlines() if l.strip()]
     with state_lock:
+        st = ensure_session_downloads(session_id)
         for url in lines:
-            item = {"id": next_id, "url": url, "status": "Queued", "progress": 0.0, "format": format_type}
-            downloads["queue"].append(item)
-            downloads["total"] += 1
+            item = {"id": next_id, "session_id": session_id, "url": url, "status": "Queued", "progress": 0.0, "format": format_type}
+            st["queue"].append(item)
+            st["total"] += 1
+            items_by_id[next_id] = item
             task_queue.put(next_id)
             next_id += 1
     broadcast()
-    return jsonify(downloads)
+    return jsonify(st)
 
 
 @app.route("/api/status")
 def status():
+    session_id = sid()
     with state_lock:
-        return jsonify(downloads)
+        return jsonify(ensure_session_downloads(session_id))
 
 
 @app.route("/api/cancel/<int:item_id>", methods=["POST"])
 def cancel(item_id):
+    session_id = sid()
     with state_lock:
         item = get_item(item_id)
         if not item:
             return jsonify({"error": "Not found"}), 404
+        if item.get("session_id") != session_id:
+            return jsonify({"error": "Not allowed"}), 403
         if item["status"] in ("Completed", "Error", "Cancelled"):
             return jsonify({"error": f"Cannot cancel — status is {item['status']}"}), 400
         cancelled_ids.add(item_id)
         item["status"] = "Cancelling"
     broadcast()
-    return jsonify(downloads)
+    return jsonify(ensure_session_downloads(session_id))
 
 
 @app.route("/api/download/<int:item_id>")
 def download_file(item_id):
+    session_id = sid()
     with state_lock:
         item = get_item(item_id)
     if not item:
         return jsonify({"error": "Not found"}), 404
+    if item.get("session_id") != session_id:
+        return jsonify({"error": "Not allowed"}), 403
     if item["status"] != "Completed":
         return jsonify({"error": "Not ready"}), 400
     fp = item.get("filepath")
@@ -279,37 +327,42 @@ def download_file(item_id):
 @app.route("/api/clear", methods=["POST"])
 def clear():
     global next_id
+    session_id = sid()
     with state_lock:
-        for item in downloads["queue"]:
+        st = ensure_session_downloads(session_id)
+        for item in st["queue"]:
             fp = item.get("filepath")
             if fp and os.path.exists(fp):
                 try: os.remove(fp)
                 except Exception: pass
-        downloads.update({"total": 0, "completed": 0, "downloading": 0, "queue": []})
-        next_id = 1
-        cancelled_ids.clear()
-        while not task_queue.empty():
-            try: task_queue.get_nowait()
-            except Exception: break
+            # If queued/downloading, prevent worker from starting it.
+            if item.get("status") not in ("Completed", "Error", "Cancelled"):
+                cancelled_ids.add(item.get("id"))
+                item["status"] = "Cancelled"
+                item["error"] = item.get("error") or "Cleared"
+        st.update({"total": 0, "completed": 0, "downloading": 0, "queue": []})
+        # Don't reset next_id and don't clear the global task queue, to keep other sessions running.
     broadcast()
-    return jsonify(downloads)
+    return jsonify(ensure_session_downloads(session_id))
 
 
 @app.route("/api/events")
 def events():
+    session_id = sid()
     def stream():
         q = Queue()
         with sse_lock:
-            sse_clients.append(q)
+            sse_clients_by_session.setdefault(session_id, []).append(q)
         try:
             with state_lock:
-                yield f"data: {json.dumps(downloads)}\n\n"
+                yield f"data: {json.dumps(ensure_session_downloads(session_id))}\n\n"
             while True:
                 yield f"data: {q.get()}\n\n"
         except GeneratorExit:
             with sse_lock:
-                if q in sse_clients:
-                    sse_clients.remove(q)
+                clients = sse_clients_by_session.get(session_id, [])
+                if q in clients:
+                    clients.remove(q)
     return Response(stream(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
