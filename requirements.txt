@@ -9,3 +9,4 @@ websockets
 brotli
 certifi
 gevent
+gallery-dl

@@ -1,4 +1,4 @@
-FROM python:3.13.7-slim
+FROM python:3.13.17-slim
 
 RUN apt-get update && apt-get install -y \
     ffmpeg gcc libffi-dev ca-certificates \
@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y curl \
 RUN pip install --upgrade pip
 RUN pip install \
     --upgrade yt-dlp \
+    gallery-dl \
     flask \
     flask-cors \
     gunicorn \
