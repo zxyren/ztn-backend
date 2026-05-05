@@ -11,3 +11,5 @@ List Addons:
 3. pip install quickjs
 4. pip install -U yt-dlp
 5. pip install -U curl-cffi
+6. pip install gallery-dl
+7. pip install -U youtube-dl
