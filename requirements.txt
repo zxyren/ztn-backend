@@ -1,4 +1,4 @@
-yt-dlp>=2026.02.04
+yt-dlp>=2026.03.17
 requests
 flask
 flask-cors
