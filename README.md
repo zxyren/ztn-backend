@@ -1,3 +1,13 @@
+---
+title: Downloader Pro Version
+description: A powerful video downloader that supports multiple platforms and formats, providing high-quality downloads with ease
+emoji: 🚀
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_port: 7860
+---
+
 # Required steps
 
 # User must intall this requirement Addons to run the Pro Version
