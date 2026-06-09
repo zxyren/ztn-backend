@@ -161,10 +161,31 @@ def download_image(sid, item_id):
         if not files:
             raise RuntimeError(err.strip() or "No images downloaded")
 
+        dyn_title = ""
+        try:
+            from handlers import resolve_thumbnail
+            t_info = resolve_thumbnail(item["url"], ffmpeg_dir())
+            if t_info and t_info.get("title"):
+                import re
+                clean = re.sub(r'[\\/*?:"<>|]', "", t_info["title"]).strip()
+                if clean:
+                    dyn_title = clean[:50]
+        except Exception:
+            pass
+
         if len(files) == 1:
-            fp, fname = files[0], os.path.basename(files[0])
+            fp = files[0]
+            ext = os.path.splitext(fp)[1]
+            if dyn_title:
+                fname = f"{dyn_title}_{item_id}{ext}"
+            else:
+                fname = os.path.basename(fp)
         else:
-            fname = f"images_{item_id}.zip"
+            if dyn_title:
+                fname = f"{dyn_title}_{item_id}.zip"
+            else:
+                fname = f"images_{item_id}.zip"
+
             fp = os.path.join(DOWNLOAD_FOLDER, fname)
             with zipfile.ZipFile(fp, "w", zipfile.ZIP_DEFLATED) as z:
                 for f in files:
