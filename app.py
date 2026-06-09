@@ -71,6 +71,7 @@ def build_video_opts(hook, out_dir):
         "restrictfilenames": True, "windowsfilenames": True,
         "updatetime": False, "noverifyhttpscert": True,
         "retries": 10, "fragment_retries": 10,
+        "socket_timeout": 15,
         "concurrent_fragment_downloads": 4,
         "ffmpeg_location": ffmpeg_dir(),
         "format": "bestvideo+bestaudio/best",
@@ -82,7 +83,7 @@ def build_video_opts(hook, out_dir):
         },
         "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
     }
-
+    
 
 def build_audio_opts(hook, out_dir):
     return {
@@ -91,6 +92,7 @@ def build_audio_opts(hook, out_dir):
         "restrictfilenames": True, "windowsfilenames": True,
         "updatetime": False, "noverifyhttpscert": True,
         "retries": 10, "fragment_retries": 10,
+        "socket_timeout": 15,
         "ffmpeg_location": ffmpeg_dir(),
         "format": "bestaudio/best",
         "postprocessors": [{"key": "FFmpegExtractAudio",
@@ -131,10 +133,20 @@ def download_image(sid, item_id):
 
     upd("Downloading", 10)
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             ["gallery-dl", "--directory", out_dir, item["url"]],
-            capture_output=True, text=True, timeout=300,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
+        while proc.poll() is None:
+            time.sleep(0.5)
+            with lock:
+                if (sid, item_id) in cancelled:
+                    proc.kill()
+                    raise Exception("Cancelled")
+        
+        out, err = proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(err.strip() or "Gallery-dl failed")
 
         # Collect only image files — skip any audio/video gallery-dl pulled in
         all_files = [
@@ -298,7 +310,7 @@ def cancel_item(item_id):
         if item["status"] in ("Completed", "Error", "Cancelled"):
             return jsonify({"error": f"Cannot cancel: {item['status']}"}), 400
         cancelled.add((sid, item_id))
-        item["status"] = "Cancelling"
+        item["status"] = "Cancelled"
     broadcast(sid)
     return jsonify(sessions[sid])
 
@@ -315,19 +327,58 @@ def download_file(item_id):
     return send_file(fp, as_attachment=True, download_name=item.get("filename", "download"))
 
 
+@app.route("/api/remove/<int:item_id>", methods=["POST"])
+def remove_item(item_id):
+    sid, err = require_sid()
+    if err: return err
+    with lock:
+        item = get_item(sid, item_id)
+        if not item: return jsonify({"error": "Not found"}), 404
+        
+        d = sessions.get(sid)
+        if item in d.get("queue", []):
+            d["queue"].remove(item)
+            if item["status"] == "Completed":
+                d["completed"] = max(0, d["completed"] - 1)
+            d["total"] = max(0, d["total"] - 1)
+            
+            if item["status"] in ("Queued", "Starting", "Downloading", "Converting", "Merging"):
+                cancelled.add((sid, item_id))
+            
+            fp = item.get("filepath")
+            if fp and os.path.exists(fp):
+                try: os.remove(fp)
+                except: pass
+                
+            out_dir = item_dir(sid, item_id)
+            if os.path.exists(out_dir):
+                try: shutil.rmtree(out_dir)
+                except: pass
+    broadcast(sid)
+    return jsonify(sessions[sid])
+
+
 @app.route("/api/clear", methods=["POST"])
 def clear():
     sid, err = require_sid()
     if err: return err
     with lock:
         for item in sessions.get(sid, {}).get("queue", []):
+            if item["status"] in ("Queued", "Starting", "Downloading", "Converting", "Merging"):
+                cancelled.add((sid, item["id"]))
+
             fp = item.get("filepath")
             if fp and os.path.exists(fp):
                 try: os.remove(fp)
                 except: pass
+
+            out_dir = item_dir(sid, item["id"])
+            if os.path.exists(out_dir):
+                try: shutil.rmtree(out_dir)
+                except: pass
+
         sessions[sid] = {"total": 0, "completed": 0, "downloading": 0, "queue": []}
         next_ids[sid] = 1
-        cancelled.difference_update({k for k in cancelled if k[0] == sid})
     broadcast(sid)
     return jsonify(sessions[sid])
 
