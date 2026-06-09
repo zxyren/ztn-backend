@@ -159,7 +159,7 @@ def download_image(sid, item_id):
             key=os.path.getmtime,
         )
         if not files:
-            raise RuntimeError(result.stderr.strip() or "No images downloaded")
+            raise RuntimeError(err.strip() or "No images downloaded")
 
         if len(files) == 1:
             fp, fname = files[0], os.path.basename(files[0])
