@@ -401,7 +401,7 @@ def events():
     return Response(stream(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-
+# ── Thumbnail retrieval ─────────────────────────────────────────────────────
 @app.route("/api/thumbnail", methods=["POST"])
 def thumbnail():
     url = (request.get_json(force=True, silent=True) or {}).get("url", "").strip()
