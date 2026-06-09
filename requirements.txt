@@ -10,3 +10,5 @@ brotli
 certifi
 gevent
 gallery-dl
+httpx
+cachetools

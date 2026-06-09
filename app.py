@@ -402,24 +402,17 @@ def events():
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 # ── Thumbnail retrieval ─────────────────────────────────────────────────────
+from handlers import resolve_thumbnail
+
 @app.route("/api/thumbnail", methods=["POST"])
 def thumbnail():
     url = (request.get_json(force=True, silent=True) or {}).get("url", "").strip()
-    if not url: return jsonify({"error": "No URL"}), 400
-    try:
-        info = YoutubeDL({"quiet": True, "skip_download": True,
-                          "socket_timeout": 10, "ffmpeg_location": ffmpeg_dir()}
-                         ).extract_info(url, download=False)
-        if not info: return jsonify({"error": "No info"}), 404
-        thumbs = [t for t in info.get("thumbnails", []) if t.get("url")]
-        low_q  = [t for t in thumbs if 240 <= t.get("width", 0) <= 640]
-        thumb  = (min(low_q, key=lambda x: abs(x.get("width", 0) - 480))["url"] if low_q
-                  else min(thumbs, key=lambda x: x.get("width", 999999))["url"] if thumbs
-                  else info.get("thumbnail"))
-        return (jsonify({"thumbnail": thumb, "title": info.get("title", "")})
-                if thumb else (jsonify({"error": "No thumbnail"}), 404))
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    if not url:
+        return jsonify({"error": "No URL"}), 400
+    result = resolve_thumbnail(url, ffmpeg_dir())
+    if result:
+        return jsonify(result)
+    return jsonify({"error": "No thumbnail found"}), 404
 
 
 @app.route("/")
