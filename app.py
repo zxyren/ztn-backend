@@ -62,6 +62,78 @@ def ffmpeg_dir():
     return os.path.dirname(FFMPEG) if os.path.isabs(FFMPEG) else None
 
 
+def get_file_metadata(fp, item_format):
+    if not os.path.exists(fp): return None
+    size_bytes = os.path.getsize(fp)
+    if size_bytes < 1024 * 1024: size_str = f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024: size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
+    else: size_str = f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+    
+    ext = os.path.splitext(fp)[1].upper().replace(".", "")
+    if fp.endswith(".zip"): return f"ZIP \u00b7 {size_str}"
+
+    try:
+        cmd = [FFPROBE, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", fp]
+        out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
+        info = json.loads(out)
+        
+        streams = info.get("streams", [])
+        fmt_info = info.get("format", {})
+        
+        video_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
+        audio_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
+        
+        def format_duration(d):
+            if not d: return ""
+            try:
+                seconds = int(float(d))
+                m, s = divmod(seconds, 60)
+                h, m = divmod(m, 60)
+                if h > 0: return f"{h}:{m:02d}:{s:02d}"
+                return f"{m}:{s:02d}"
+            except: return ""
+
+        duration = format_duration(fmt_info.get("duration"))
+        
+        parts = []
+        if item_format == "audio":
+            if audio_stream:
+                bit_rate = audio_stream.get("bit_rate") or fmt_info.get("bit_rate")
+                if bit_rate: parts.append(f"{int(float(bit_rate)) // 1000} kbps")
+            if duration: parts.append(duration)
+            parts.append(ext)
+            parts.append(size_str)
+            
+        elif item_format == "video":
+            if video_stream:
+                height = video_stream.get("height")
+                width = video_stream.get("width")
+                if height:
+                    if width and width >= 3800: parts.append("4K Ultra HD")
+                    else: parts.append(f"{height}p")
+            if duration: parts.append(duration)
+            if video_stream:
+                codec = video_stream.get("codec_name", "").upper()
+                if codec == "H264": codec = "H.264"
+                if codec: parts.append(codec)
+            elif ext: parts.append(ext)
+            parts.append(size_str)
+            
+        elif item_format == "image":
+            if video_stream:
+                w, h = video_stream.get("width"), video_stream.get("height")
+                if w and h: parts.append(f"{w}x{h}")
+            parts.append(ext)
+            parts.append(size_str)
+            
+        else:
+            parts = [ext, size_str]
+            
+        return " \u00b7 ".join([p for p in parts if p])
+    except Exception as e:
+        return f"{ext} \u00b7 {size_str}"
+
+
 # ── yt-dlp option builders ─────────────────────────────────────────────────
 
 def build_video_opts(hook, out_dir):
@@ -191,9 +263,11 @@ def download_image(sid, item_id):
                 for f in files:
                     z.write(f, os.path.relpath(f, out_dir))
 
+        metadata = get_file_metadata(fp, "image")
+
         with lock:
             item.update(status="Completed", progress=100.0,
-                        filename=fname, filepath=fp, image_count=len(files))
+                        filename=fname, filepath=fp, image_count=len(files), metadata=metadata)
             sessions[sid]["completed"] += 1
         broadcast(sid)
 
@@ -237,9 +311,11 @@ def download_media(sid, item_id):
         if not fp or not os.path.exists(fp) or os.path.getsize(fp) < 1024:
             raise Exception("Output file missing or too small after download")
 
+        metadata = get_file_metadata(fp, fmt)
+
         with lock:
             item.update(status="Completed", progress=100.0,
-                        filename=os.path.basename(fp), filepath=fp)
+                        filename=os.path.basename(fp), filepath=fp, metadata=metadata)
             sessions[sid]["completed"] += 1
         broadcast(sid)
 
